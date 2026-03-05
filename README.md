@@ -1,10 +1,22 @@
 # ML-Automixer-Project
 
 SETUP:
-metadata.csv, SALAMI_iTunes_library.csv, and annotations folder (required for you to find in the SALAMI dataset cause its big and i haven't pulled this repo yet) from [SALAMI](https://github.com/DDMAL/salami-data-public/tree/master). these files should all be on the same folder level as the python script.
+make sure to download the entire repo from [SALAMI](https://github.com/DDMAL/salami-data-public/tree/master). when running main, you are going to need the file path to the 
+metadata folder like my example below:
+for base run: python main.py --csv /Users/ninjadare/Downloads/salami-data-public-master/metadata --n 5
+--n allows us to cap how many things to download
+--txt was not touched at all by me haha idk what it does
+see annotations folder for all the raw inputs, we use parsed functions
 
-the joincsv.py file is just a little messing around to figure out how to join the csvs (i mean basically SQL in Python)
+you can delete audio, spectograms and manifest if you want a clean slate, because the code will skip things already processed
+i was thinking to git ignore those three files/folders but it might be worth it to push through
 
-more info about how to run the main file are in the arguments/code, for base run: python3 main.py --csv metadata.csv --no-shuffle
+# todo
+needs to validate length of song downloaded from 
+delete a ton of the commented out and redundant code not being used anymore
+the manifest csv is HUGE maybe we can think on how to reduce it
 
-metadata.csv is what i was working off of, but SALAMI_iTunes_library has a more accurate "artist" column.
+# for venv (git ignored)
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt

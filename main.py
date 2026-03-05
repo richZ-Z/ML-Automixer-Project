@@ -14,6 +14,7 @@ import json
 import re
 import io
 import csv
+import difflib
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -44,7 +45,15 @@ group.add_argument(
     "--txt", type=str, help="Path to txt file (one 'Artist - Song' per line)"
 )
 group.add_argument(
-    "--csv", type=str, help="Path to CSV with SONG_ID, SONG_TITLE, ARTIST columns"
+    # for now, we expect the SALAMI iTunes library CSV to be pre-downloaded and cleaned manually into this file
+    # might add ability to read different csv files in the future, but this is just a one-off script for now
+    "--csv", type=str,
+    help=(
+        "Path to one or more CSV files (comma-separated) or a directory "
+        "containing SALAMI metadata.  Files must include SONG_ID (or salami_id), "
+        "a title field (TITLE / TITLE_IN_SALAMI / SONG_TITLE / Name), and ARTIST."
+    )
+    # can type any string here since we hardcode the filename 
 )
 parser.add_argument(
     "--n", type=int, default=None, help="Number of songs to process (default: all)"
@@ -107,14 +116,14 @@ MANIFEST_FIELDS = [
     "SONG_ID",
     "SONG_TITLE",
     "ARTIST",
-    "SPECTROGRAM_PATH_MEL",
-    "SPECTROGRAM_PATH_LINEAR",
-    "SPECTROGRAM_MATRIX_MEL",  # raw numpy matrix (128 x T), base64-encoded .npy
-    "SPECTROGRAM_B64_LINEAR",  # PNG base64 kept for human reference
     "BOUNDARIES_1",
     "SEGMENTS_JSON_1",
     "BOUNDARIES_2",
     "SEGMENTS_JSON_2",
+    "SPECTROGRAM_PATH_MEL",
+    "SPECTROGRAM_PATH_LINEAR",
+    "SPECTROGRAM_MATRIX_MEL",  # raw numpy matrix (128 x T), base64-encoded .npy
+    "SPECTROGRAM_B64_LINEAR",  # PNG base64 kept for human reference
 ]
 
 # Columns to carry over into the merged dataset (excludes redundant title/artist)
@@ -144,47 +153,33 @@ def append_to_manifest(
                 "SONG_ID": song_id,
                 "SONG_TITLE": song_title,
                 "ARTIST": artist,
-                "SPECTROGRAM_PATH_MEL": mel_path,
-                "SPECTROGRAM_PATH_LINEAR": linear_path,
-                "SPECTROGRAM_MATRIX_MEL": matrix_to_base64(mel_matrix),
-                "SPECTROGRAM_B64_LINEAR": img_to_base64(linear_path),
                 "BOUNDARIES_1": json.dumps(boundaries1),
                 "SEGMENTS_JSON_1": json.dumps(segments1),
                 "BOUNDARIES_2": json.dumps(boundaries2),
                 "SEGMENTS_JSON_2": json.dumps(segments2),
+                "SPECTROGRAM_PATH_MEL": mel_path,
+                "SPECTROGRAM_PATH_LINEAR": linear_path,
+                "SPECTROGRAM_MATRIX_MEL": matrix_to_base64(mel_matrix),
+                "SPECTROGRAM_B64_LINEAR": img_to_base64(linear_path),
             }
         )
 
 
-def parse_textfile(path):
-    """
-    Parse a SALAMI annotation text file.
-    Returns:
-      - segments: list of {t, raw_label, major, function} dicts (full JSON data)
-      - boundaries: list of timestamps where significant changes occur
-                    (uppercase letter change OR named function like Verse/Bridge/Chorus/Intro/Outro)
-    """
-    NAMED_FUNCTIONS = {
-        "verse",
-        "chorus",
-        "bridge",
-        "intro",
-        "outro",
-        "prechorus",
-        "pre-chorus",
-        "transition",
-        "interlude",
-        "solo",
-        "coda",
-    }
+# helper for already-parsed annotation files
 
+def load_functions_file(path: str):
+    """Read *_functions.txt and return (segments, boundaries).
+
+    *segments* is a list of dicts with keys ``t`` and ``f``.
+    *boundaries* is just the list of timestamps.
+
+    The files live in ``annotations/<id>/parsed/`` so we look there
+    instead of attempting to parse raw SALAMI textfiles.
+    """
     segments = []
     boundaries = []
-    prev_major = None
-    prev_functions = set()
-
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -192,49 +187,17 @@ def parse_textfile(path):
                 parts = line.split("\t", 1)
                 if len(parts) < 2:
                     continue
-
-                t = float(parts[0])
-                raw_label = parts[1].strip()
-
-                components = [
-                    c.strip().rstrip(",") for c in re.split(r",\s*", raw_label)
-                ]
-                major = next((c for c in components if re.match(r"^[A-Z]$", c)), None)
-                functions = {
-                    c.lower().strip("()")
-                    for c in components
-                    if c.lower().strip("()") in NAMED_FUNCTIONS
-                }
-
-                segments.append(
-                    {
-                        "t": t,
-                        "raw_label": raw_label,
-                        "major": major,
-                        "functions": list(functions),
-                    }
-                )
-
-                is_boundary = False
-                if major and major != prev_major:
-                    is_boundary = True
-                if functions and not functions.issubset(prev_functions):
-                    is_boundary = True
-                if raw_label.lower() in ("silence", "end", "applause", "noise"):
-                    is_boundary = True
-
-                if is_boundary:
-                    boundaries.append(t)
-
-                if major:
-                    prev_major = major
-                prev_functions = functions
-
+                try:
+                    t = float(parts[0])
+                except ValueError:
+                    continue
+                label = parts[1]
+                segments.append({"t": t, "f": label})
+                boundaries.append(t)
     except FileNotFoundError:
-        print(f"  ⚠ Annotation file not found: {path}")
-    except Exception as e:
-        print(f"  ⚠ Could not parse {path}: {e}")
-
+        pass
+    except Exception:
+        pass
     return segments, boundaries
 
 
@@ -243,48 +206,149 @@ def parse_textfile(path):
 entries = []
 
 if args.txt:
-    if not os.path.exists(args.txt):
-        print(f"ERROR: {args.txt} not found.")
-        sys.exit(1)
-    with open(args.txt) as f:
-        for i, line in enumerate(f):
+    # not edited by darius lowk not functional rn
+    with open(args.txt, "r", encoding="utf-8") as f:
+        for line in f:
             line = line.strip()
-            if line:
-                parts = line.split(" - ", 1)
-                artist = parts[0].strip() if len(parts) == 2 else "Unknown"
-                title = parts[1].strip() if len(parts) == 2 else line
-                entries.append(
-                    {
-                        "song_id": str(i + 1),
-                        "song_title": title,
-                        "artist": artist,
-                        "query": line,
-                    }
-                )
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(" - ", 1)
+            if len(parts) != 2:
+                continue
+            artist = clean(parts[0])
+            song_title = clean(parts[1])
+            if not artist or not song_title:
+                continue
+            query = f"ytsearch1:{artist} - {song_title} official audio topic -live -remix -cover"
+            entries.append({
+                "song_id": f"{artist}_{song_title}".replace(" ", "_"),
+                "song_title": song_title,
+                "artist": artist,
+                "query": query,
+                "textfile1": "",
+                "textfile2": ""
+            })
 
 elif args.csv:
-    if not os.path.exists(args.csv):
-        print(f"ERROR: {args.csv} not found.")
+
+    # Accept either a single CSV, multiple comma-separated CSVs, or a directory
+    # containing CSV files.  Concatenate them all so the script can harvest as
+    # much SALAMI metadata as possible.
+    csv_path = args.csv
+    paths = []
+    if os.path.isdir(csv_path):
+        for fname in sorted(os.listdir(csv_path)):
+            if fname.lower().endswith(".csv"):
+                paths.append(os.path.join(csv_path, fname))
+    else:
+        # split on commas in case user provided a list of files
+        for part in csv_path.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if not os.path.exists(part):
+                print(f"ERROR: CSV file not found: {part}")
+                sys.exit(1)
+            paths.append(part)
+
+    if not paths:
+        print(f"ERROR: no CSV files found in '{csv_path}'")
         sys.exit(1)
-    df = pd.read_csv(args.csv)
+
+    # read and combine only those dataframes that contain at least
+    # ARTIST and one of the potential title columns. some of the SALAMI
+    # metadata files (codaich, etc.) don't contain any song info and would
+    # otherwise break the logic later on.
+    df_list = []
+    for path in paths:
+        tmp = pd.read_csv(path, nrows=0)
+        tmp.columns = tmp.columns.str.strip()
+        # check for mandatory artist column and at least one title column
+        has_artist = "ARTIST" in tmp.columns
+        has_title = any(col in tmp.columns for col in [
+            "TITLE",
+            "TITLE_IN_SALAMI",
+            "SONG_TITLE",
+            "Name",
+        ])
+        if not (has_artist and has_title):
+            print(f"Skipping {os.path.basename(path)}: missing ARTIST/title columns")
+            continue
+        # re-read full dataframe now that we've decided to keep it
+        full = pd.read_csv(path)
+        full.columns = full.columns.str.strip()
+        df_list.append(full)
+    if not df_list:
+        print("ERROR: no suitable CSV files found (must contain ARTIST + title column)")
+        sys.exit(1)
+    df = pd.concat(df_list, ignore_index=True)
+
+    # pick title column: prefer SALAMI naming if present, otherwise fall back to
+    # a handful of common names (including the old iTunes 'Name' column).
+    possible_title_cols = [
+        "TITLE",           # internetarchive, rwc, etc.
+        "TITLE_IN_SALAMI", # isophonics
+        "SONG_TITLE",      # older csvs
+        "Name",
+    ]
+    title_col = None
+    for col in possible_title_cols:
+        if col in df.columns:
+            title_col = col
+            break
+    if title_col is None:
+        print(
+            "ERROR: could not find a title column in CSV; looked for "
+            f"{possible_title_cols}, got {list(df.columns)}"
+        )
+        sys.exit(1)
+
+    # ID column - many of the provided files already have SONG_ID; the iTunes
+    # library uses `salami_id`.
+    id_col = "SONG_ID" if "SONG_ID" in df.columns else "salami_id"
+
+    # artist column should be named ARTIST in all files
+    artist_col = "ARTIST"
+    if artist_col not in df.columns:
+        print("ERROR: CSV is missing ARTIST column")
+        sys.exit(1)
+
+    # ensure id field is string to maintain compatibility with manifest lookups
+    df[id_col] = df[id_col].astype(str)
+
+    # -------------------------
+    # Build entries
+    # -------------------------
     for _, row in df.iterrows():
-        title = clean(str(row["SONG_TITLE"]))
-        artist = clean(str(row["ARTIST"]))
-        song_id = str(row["SONG_ID"])
-        annotation_dir = os.path.join("annotations", song_id)
-        textfile1 = os.path.join(annotation_dir, "textfile1.txt")
-        textfile2 = os.path.join(annotation_dir, "textfile2.txt")
-        if title and artist:
-            entries.append(
-                {
-                    "song_id": song_id,
-                    "song_title": title,
-                    "artist": artist,
-                    "query": f"{artist} - {title}",
-                    "textfile1": textfile1,
-                    "textfile2": textfile2,
-                }
-            )
+        song_id = row[id_col]
+        song_title = row.get(title_col)
+        artist = row.get(artist_col)
+
+        if pd.isna(song_title) or pd.isna(artist):
+            continue
+
+        song_title = clean(str(song_title))
+        artist = clean(str(artist))
+
+        if not song_title or not artist:
+            continue
+
+        # Strong YouTube query
+        query = f"ytsearch1:{artist} {song_title}"
+
+        # Annotation folder structure (same as before)
+        annotation_dir = os.path.join("annotations", song_id, "parsed")
+        textfile1 = os.path.join(annotation_dir, "textfile1_functions.txt")
+        textfile2 = os.path.join(annotation_dir, "textfile2_functions.txt")
+
+        entries.append({
+            "song_id": song_id,
+            "song_title": song_title,
+            "artist": artist,
+            "query": query,
+            "textfile1": textfile1,
+            "textfile2": textfile2,
+        })
 
 if not entries:
     print("ERROR: No songs found in input file.")
@@ -355,14 +419,23 @@ for i, entry in enumerate(entries, 1):
     audio_path = None
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=True)
-            if "entries" in info:
-                if not info["entries"]:
-                    raise ValueError("No search results found")
-                yt_title = info["entries"][0]["title"]
-            else:
-                yt_title = info["title"]
-            audio_path = os.path.join(AUDIO_DIR, f"{yt_title}.wav")
+            # First, search for videos without downloading
+            print(f"  Searching YouTube for: {query}")
+            search_info = ydl.extract_info(query, download=False)
+            if "entries" not in search_info or not search_info["entries"]:
+                raise ValueError("No search results found")
+            entries_list = search_info["entries"]
+            # Find the best match using difflib
+            best_entry = max(entries_list, key=lambda e: difflib.SequenceMatcher(None, query.lower(), e.get('title', '').lower()).ratio())
+            best_title = best_entry['title']
+            best_id = best_entry['id']
+            similarity = difflib.SequenceMatcher(None, query.lower(), best_title.lower()).ratio()
+            print(f"  Best match: {best_title} (similarity: {similarity:.2f})")
+            if similarity < 0.3:
+                raise ValueError(f"Best match similarity {similarity:.2f} below threshold 0.3")
+            # Now download the best match
+            ydl.extract_info(f"https://www.youtube.com/watch?v={best_id}", download=True)
+            audio_path = os.path.join(AUDIO_DIR, f"{best_title}.wav")
 
         if not os.path.exists(audio_path):
             wavs = [f for f in os.listdir(AUDIO_DIR) if f.endswith(".wav")]
@@ -430,14 +503,17 @@ for i, entry in enumerate(entries, 1):
         print(f"  ✓ Linear spectrogram saved")
 
         # 3. Parse annotation text files
+        # read already-parsed segmentation files
         textfile1 = entry.get("textfile1", "")
         textfile2 = entry.get("textfile2", "")
-        segments1, boundaries1 = parse_textfile(textfile1) if textfile1 else ([], [])
-        segments2, boundaries2 = parse_textfile(textfile2) if textfile2 else ([], [])
+        segments1, boundaries1 = (
+            load_functions_file(textfile1) if textfile1 and os.path.exists(textfile1) else ([], []))
+        segments2, boundaries2 = (
+            load_functions_file(textfile2) if textfile2 and os.path.exists(textfile2) else ([], []))
         if boundaries1:
-            print(f"  ✓ Parsed {len(boundaries1)} boundaries from annotator 1")
+            print(f"  ✓ Loaded {len(boundaries1)} boundaries from annotator 1")
         if boundaries2:
-            print(f"  ✓ Parsed {len(boundaries2)} boundaries from annotator 2")
+            print(f"  ✓ Loaded {len(boundaries2)} boundaries from annotator 2")
 
         # 4. Write to manifest immediately (progress saved even if we crash mid-run)
         append_to_manifest(
@@ -474,7 +550,7 @@ for i, entry in enumerate(entries, 1):
 print(f"\n{'='*50}")
 print(f"Done! {len(success)}/{len(entries)} succeeded.")
 
-if args.csv and os.path.exists(MANIFEST_FILE):
+""" if args.csv and os.path.exists(MANIFEST_FILE):
     print(f"\nJoining manifest back to original dataset...")
     original_df = pd.read_csv(args.csv)
     manifest_df = pd.read_csv(MANIFEST_FILE)
@@ -511,7 +587,7 @@ if failed:
         print(f"  - {e['artist']} - {e['song_title']}  (ID: {e['song_id']})")
     with open("failed_songs.txt", "w") as f:
         f.write("\n".join([f"{e['artist']} - {e['song_title']}" for e in failed]))
-    print("\nFailed songs saved to failed_songs.txt")
+    print("\nFailed songs saved to failed_songs.txt") """
 
 # ── Training-time loading snippet ─────────────────────────────────────────────
 # import base64, io, numpy as np

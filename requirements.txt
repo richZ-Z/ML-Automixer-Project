@@ -1,0 +1,5 @@
+yt-dlp
+librosa
+matplotlib
+numpy
+pandas
