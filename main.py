@@ -265,12 +265,7 @@ elif args.csv:
         tmp.columns = tmp.columns.str.strip()
         # check for mandatory artist column and at least one title column
         has_artist = "ARTIST" in tmp.columns
-        has_title = any(col in tmp.columns for col in [
-            "TITLE",
-            "TITLE_IN_SALAMI",
-            "SONG_TITLE",
-            "Name",
-        ])
+        has_title = "TITLE" in tmp.columns
         if not (has_artist and has_title):
             print(f"Skipping {os.path.basename(path)}: missing ARTIST/title columns")
             continue
@@ -283,29 +278,14 @@ elif args.csv:
         sys.exit(1)
     df = pd.concat(df_list, ignore_index=True)
 
-    # pick title column: prefer SALAMI naming if present, otherwise fall back to
-    # a handful of common names (including the old iTunes 'Name' column).
-    possible_title_cols = [
-        "TITLE",           # internetarchive, rwc, etc.
-        "TITLE_IN_SALAMI", # isophonics
-        "SONG_TITLE",      # older csvs
-        "Name",
-    ]
-    title_col = None
-    for col in possible_title_cols:
-        if col in df.columns:
-            title_col = col
-            break
-    if title_col is None:
-        print(
-            "ERROR: could not find a title column in CSV; looked for "
-            f"{possible_title_cols}, got {list(df.columns)}"
-        )
+    # title column should be named TITLE in all files
+    title_col = "TITLE"
+    if title_col not in df.columns:
+        print("ERROR: CSV is missing TITLE column")
         sys.exit(1)
 
-    # ID column - many of the provided files already have SONG_ID; the iTunes
-    # library uses `salami_id`.
-    id_col = "SONG_ID" if "SONG_ID" in df.columns else "salami_id"
+    # they all share id
+    id_col = "SONG_ID"
 
     # artist column should be named ARTIST in all files
     artist_col = "ARTIST"
@@ -333,7 +313,6 @@ elif args.csv:
         if not song_title or not artist:
             continue
 
-        # Strong YouTube query
         query = f"ytsearch1:{artist} {song_title}"
 
         # Annotation folder structure (same as before)
@@ -545,51 +524,7 @@ for i, entry in enumerate(entries, 1):
     if i < len(entries):
         time.sleep(SLEEP_BETWEEN)
 
-# ── Build merged dataset ───────────────────────────────────────────────────────
+# ── Donesies ───────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
 print(f"Done! {len(success)}/{len(entries)} succeeded.")
-
-""" if args.csv and os.path.exists(MANIFEST_FILE):
-    print(f"\nJoining manifest back to original dataset...")
-    original_df = pd.read_csv(args.csv)
-    manifest_df = pd.read_csv(MANIFEST_FILE)
-
-    # Normalise SONG_ID to string for safe join
-    original_df["SONG_ID"] = original_df["SONG_ID"].astype(str)
-    manifest_df["SONG_ID"] = manifest_df["SONG_ID"].astype(str)
-
-    # Drop any spectrogram columns that already exist in original_df to avoid duplicates
-    cols_to_drop = [
-        c for c in MANIFEST_MERGE_COLS if c != "SONG_ID" and c in original_df.columns
-    ]
-    if cols_to_drop:
-        print(
-            f"  Dropping stale columns from original to avoid duplicates: {cols_to_drop}"
-        )
-        original_df = original_df.drop(columns=cols_to_drop)
-
-    # Deduplicate manifest (safety net if a song was written twice)
-    manifest_slim = manifest_df[MANIFEST_MERGE_COLS].drop_duplicates(
-        subset=["SONG_ID"], keep="last"
-    )
-
-    merged_df = original_df.merge(manifest_slim, on="SONG_ID", how="inner")
-    merged_df.to_csv(MERGED_FILE, index=False)
-    print(f"✓ Merged dataset saved to {MERGED_FILE} ({len(merged_df)} rows)")
-
-elif not args.csv:
-    print(f"(No original CSV to join against — manifest saved to {MANIFEST_FILE})")
-
-if failed:
-    print(f"\nFailed ({len(failed)}):")
-    for e in failed:
-        print(f"  - {e['artist']} - {e['song_title']}  (ID: {e['song_id']})")
-    with open("failed_songs.txt", "w") as f:
-        f.write("\n".join([f"{e['artist']} - {e['song_title']}" for e in failed]))
-    print("\nFailed songs saved to failed_songs.txt") """
-
-# ── Training-time loading snippet ─────────────────────────────────────────────
-# import base64, io, numpy as np
-# buf = io.BytesIO(base64.b64decode(row["SPECTROGRAM_MATRIX_MEL"]))
-# matrix = np.load(buf)   # shape: (128, T) — 128 mel bands x time frames
