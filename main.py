@@ -264,33 +264,33 @@ elif args.csv:
         tmp = pd.read_csv(path, nrows=0)
         tmp.columns = tmp.columns.str.strip()
         # check for mandatory artist column and at least one title column
-        has_artist = "ARTIST" in tmp.columns
-        has_title = "TITLE" in tmp.columns
+        has_artist = "Artist" in tmp.columns
+        has_title = "Name" in tmp.columns
         if not (has_artist and has_title):
-            print(f"Skipping {os.path.basename(path)}: missing ARTIST/title columns")
+            print(f"Skipping {os.path.basename(path)}: missing Artist/Name columns")
             continue
         # re-read full dataframe now that we've decided to keep it
         full = pd.read_csv(path)
         full.columns = full.columns.str.strip()
         df_list.append(full)
     if not df_list:
-        print("ERROR: no suitable CSV files found (must contain ARTIST + title column)")
+        print("ERROR: no suitable CSV files found (must contain Artist + Name column)")
         sys.exit(1)
     df = pd.concat(df_list, ignore_index=True)
 
     # title column should be named TITLE in all files
-    title_col = "TITLE"
+    title_col = "Name"
     if title_col not in df.columns:
-        print("ERROR: CSV is missing TITLE column")
+        print("ERROR: CSV is missing Name column")
         sys.exit(1)
 
     # they all share id
-    id_col = "SONG_ID"
+    id_col = "salami_id"
 
     # artist column should be named ARTIST in all files
-    artist_col = "ARTIST"
+    artist_col = "Artist"
     if artist_col not in df.columns:
-        print("ERROR: CSV is missing ARTIST column")
+        print("ERROR: CSV is missing Artist column")
         sys.exit(1)
 
     # ensure id field is string to maintain compatibility with manifest lookups
